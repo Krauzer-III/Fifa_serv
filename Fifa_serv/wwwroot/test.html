@@ -1,0 +1,285 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Тест парсера - МФК Газпром-Югра</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #0057B3;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background: #0057B3;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            margin: 10px;
+        }
+
+            button:hover {
+                background: #003D7A;
+            }
+
+        .player-card {
+            background: white;
+            border: 1px solid #ddd;
+            margin: 10px;
+            padding: 15px;
+            border-radius: 12px;
+            display: inline-block;
+            width: 280px;
+            vertical-align: top;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .player-photo {
+            text-align: center;
+        }
+
+            .player-photo img {
+                width: 100px;
+                height: 100px;
+                border-radius: 50%;
+                object-fit: cover;
+            }
+
+        .player-number {
+            font-size: 20px;
+            font-weight: bold;
+            color: #0057B3;
+        }
+
+        .player-name {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+
+        .player-position {
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .stats {
+            font-size: 12px;
+            color: #333;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+            margin-top: 10px;
+        }
+
+            .stats span {
+                display: inline-block;
+                width: 45%;
+                margin: 3px 0;
+            }
+
+        pre {
+            background: #333;
+            color: #0f0;
+            padding: 10px;
+            overflow: auto;
+            border-radius: 8px;
+        }
+
+        .status {
+            background: #e8f4fd;
+            padding: 10px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚽ Парсер игроков МФК Газпром-Югра</h1>
+
+        <div>
+            <button id="parseBtn">🚀 Запустить парсинг</button>
+            <button id="showBtn">📋 Показать игроков из БД</button>
+            <button id="parseMatchesBtn">⚽ Парсить матчи</button>
+            <button id="showMatchesBtn">📅 Показать матчи из БД</button>
+            <button id="clearBtn">🗑️ Очистить</button>
+        </div>
+
+        <div id="result" class="status">Нажмите кнопку для запуска парсинга</div>
+        <div id="players"></div>
+    </div>
+
+    <script>
+        // Для эмулятора Android используйте 10.0.2.2, для локального запуска - localhost
+        const apiBase = "http://localhost:5276";
+
+        document.getElementById('parseBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг запущен, подождите 1-2 минуты...</div>';
+            document.getElementById('players').innerHTML = '';
+
+            try {
+                const response = await fetch(`${apiBase}/api/v1/parser/parse-team`, { method: 'POST' });
+                const data = await response.json();
+                document.getElementById('result').innerHTML = `<div class="status">✅ ${data.message || 'Парсинг завершён!'}</div>`;
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status" style="background:#ffe0e0;">❌ Ошибка: ${error.message}</div>`;
+            }
+        };
+
+        document.getElementById('showBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Загрузка игроков...</div>';
+
+            try {
+                const response = await fetch(`${apiBase}/api/v1/team`);
+                const players = await response.json();
+
+                if (players.length === 0) {
+                    document.getElementById('players').innerHTML = '<div class="status">📭 Нет данных. Сначала запустите парсинг.</div>';
+                    document.getElementById('result').innerHTML = '<div class="status">ℹ️ База данных пуста</div>';
+                    return;
+                }
+
+                let html = `<h2>📊 Всего игроков: ${players.length}</h2>`;
+                players.forEach(p => {
+                    html += `
+                        <div class="player-card">
+                            <div class="player-photo">
+                                <img src="${p.photoBase64 || 'https://via.placeholder.com/100?text=No+Photo'}" alt="${p.name}">
+                            </div>
+                            <div class="player-number">№${p.number}</div>
+                            <div class="player-name">${p.fullName || p.name}</div>
+                            <div class="player-position">${p.position}</div>
+                            <div class="stats">
+                                <span>🏆 Игры: ${p.games}</span>
+                                <span>⚽ Голы: ${p.goals}</span>
+                                <span>🎯 Передачи: ${p.assists}</span>
+                                <span>🟨 ЖК: ${p.yellowCards}</span>
+                                <span>🟥 КК: ${p.redCards}</span>
+                                ${p.goalsConceded ? `<span>🥅 Пропущено: ${p.goalsConceded}</span>` : ''}
+                                <span>🎂 Возраст: ${p.age || '?'} лет</span>
+                            </div>
+                        </div>
+                    `;
+                });
+                document.getElementById('players').innerHTML = html;
+                document.getElementById('result').innerHTML = '<div class="status">✅ Данные загружены</div>';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status" style="background:#ffe0e0;">❌ Ошибка загрузки: ${error.message}</div>`;
+            }
+        };
+
+        document.getElementById('clearBtn').onclick = () => {
+            document.getElementById('players').innerHTML = '';
+            document.getElementById('result').innerHTML = '<div class="status">🗑️ Очищено</div>';
+        };
+
+
+        document.getElementById('parseMatchesBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг матчей...</div>';
+            try {
+                const data = await callApi('/api/v1/parser/parse-matches', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message}</div>`;
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
+        };
+
+        document.getElementById('showMatchesBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Загрузка матчей...</div>';
+
+            try {
+                const response = await fetch(`${apiBase}/api/v1/matches`);
+                const data = await response.json();
+
+                // Обрабатываем формат { home: [...], away: [...], hash: "..." }
+                const allMatches = [...(data.home || []), ...(data.away || [])];
+
+                if (allMatches.length === 0) {
+                    document.getElementById('players').innerHTML = '<div class="status">📭 Нет данных о матчах. Сначала запустите парсинг матчей.</div>';
+                    document.getElementById('result').innerHTML = '<div class="status">ℹ️ База данных матчей пуста</div>';
+                    return;
+                }
+
+                // Разделяем на прошедшие и предстоящие
+                const today = new Date().toISOString().slice(0, 10);
+                const upcoming = allMatches.filter(m => m.date >= today).sort((a, b) => a.date.localeCompare(b.date));
+                const past = allMatches.filter(m => m.date < today).sort((a, b) => b.date.localeCompare(a.date));
+
+                let html = `<h2>📊 Всего матчей: ${allMatches.length}</h2>`;
+
+                // Предстоящие матчи
+                if (upcoming.length > 0) {
+                    html += `<h3 style="color:#0057B3; margin-top:20px;">📅 Предстоящие матчи (${upcoming.length})</h3>`;
+                    html += `<div style="display: flex; flex-wrap: wrap; gap: 15px;">`;
+                    upcoming.forEach(m => {
+                        html += renderMatchCard(m);
+                    });
+                    html += `</div>`;
+                }
+
+                // Прошедшие матчи
+                if (past.length > 0) {
+                    html += `<h3 style="color:#666; margin-top:20px;">✅ Прошедшие матчи (${past.length})</h3>`;
+                    html += `<div style="display: flex; flex-wrap: wrap; gap: 15px;">`;
+                    past.forEach(m => {
+                        html += renderMatchCard(m);
+                    });
+                    html += `</div>`;
+                }
+
+                document.getElementById('players').innerHTML = html;
+                document.getElementById('result').innerHTML = '<div class="status success">✅ Данные матчей загружены</div>';
+
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка загрузки: ${error.message}</div>`;
+            }
+        };
+
+        // Функция для отображения карточки матча
+        function renderMatchCard(match) {
+            const isHome = match.isHome;
+            const homeTeam = isHome ? "Газпром-Югра" : match.team1;
+            const awayTeam = isHome ? match.team2 : "Газпром-Югра";
+            const isUpcoming = match.score === "-:-" || match.status === "upcoming";
+
+            return `
+        <div class="match-card" style="background: white; border: 1px solid #ddd; border-radius: 12px; padding: 15px; width: 320px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <span style="background: ${isHome ? '#28A745' : '#FFC107'}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">
+                    ${isHome ? '🏠 Дома' : '✈️ Выезд'}
+                </span>
+                <span style="font-size: 12px; color: #666;">${match.round || '?'} тур</span>
+            </div>
+            
+            <div style="display: flex; align-items: center; justify-content: space-between; margin: 10px 0;">
+                <div style="text-align: center; flex: 1;">
+                    <div style="font-weight: bold; font-size: 14px;">${homeTeam}</div>
+                </div>
+                <div style="font-size: 20px; font-weight: bold; margin: 0 10px; color: #0057B3;">${match.score || '-:-'}</div>
+                <div style="text-align: center; flex: 1;">
+                    <div style="font-weight: bold; font-size: 14px;">${awayTeam}</div>
+                </div>
+            </div>
+            
+            <div style="border-top: 1px solid #eee; margin-top: 10px; padding-top: 10px; font-size: 12px; color: #666;">
+                <div>📅 ${match.date || '?'} ${match.weekday ? `(${match.weekday})` : ''}</div>
+                <div>⏰ ${match.time || '?'}</div>
+                <div>📍 ${match.city || '?'}, ${match.stadium || '?'}</div>
+                ${match.score !== '-:-' && match.score !== '' ? `<div>${isUpcoming ? '' : '🏆 Завершён'}</div>` : '<div>⏳ Ожидается</div>'}
+            </div>
+        </div>
+    `;
+        }
+    </script>
+</body>
+</html>
