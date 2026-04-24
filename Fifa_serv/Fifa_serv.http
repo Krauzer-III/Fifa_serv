@@ -1,0 +1,6 @@
+@Fifa_serv_HostAddress = http://localhost:5276
+
+GET {{Fifa_serv_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
