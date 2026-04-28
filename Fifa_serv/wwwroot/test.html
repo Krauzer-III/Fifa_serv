@@ -10,12 +10,16 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
 
         h1 {
             color: #0057B3;
+        }
+
+        h2, h3 {
+            margin-top: 20px;
         }
 
         button {
@@ -26,7 +30,7 @@
             color: white;
             border: none;
             border-radius: 8px;
-            margin: 10px;
+            margin: 10px 10px 10px 0;
         }
 
             button:hover {
@@ -87,119 +91,186 @@
                 margin: 3px 0;
             }
 
-        pre {
-            background: #333;
-            color: #0f0;
-            padding: 10px;
-            overflow: auto;
-            border-radius: 8px;
-        }
-
         .status {
             background: #e8f4fd;
             padding: 10px;
             border-radius: 8px;
             margin: 10px 0;
         }
+
+        .error {
+            background: #ffe0e0;
+            color: #c00;
+        }
+
+        .success {
+            background: #e0ffe0;
+            color: #080;
+        }
+
+        .match-card {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            padding: 15px;
+            width: 320px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            transition: transform 0.1s;
+            display: inline-block;
+            margin: 10px;
+            vertical-align: top;
+        }
+
+            .match-card:hover {
+                transform: scale(1.02);
+            }
+
+        .matches-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>⚽ Парсер игроков МФК Газпром-Югра</h1>
+        <h1>⚽ Парсер игроков и матчей МФК Газпром-Югра</h1>
+
+        <div id="apiStatus" class="status">🔄 Проверка подключения к API...</div>
 
         <div>
-            <button id="parseBtn">🚀 Запустить парсинг</button>
+            <button id="parseBtn">🚀 Запустить парсинг игроков</button>
             <button id="showBtn">📋 Показать игроков из БД</button>
             <button id="parseMatchesBtn">⚽ Парсить матчи</button>
             <button id="showMatchesBtn">📅 Показать матчи из БД</button>
             <button id="clearBtn">🗑️ Очистить</button>
         </div>
 
-        <div id="result" class="status">Нажмите кнопку для запуска парсинга</div>
+        <div id="result" class="status">Нажмите кнопку для запуска</div>
         <div id="players"></div>
     </div>
 
     <script>
-        // Для эмулятора Android используйте 10.0.2.2, для локального запуска - localhost
-        const apiBase = "http://localhost:5276";
+        // Базовый URL API (порт может отличаться)
+        let apiBase = null;
 
-        document.getElementById('parseBtn').onclick = async () => {
-            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг запущен, подождите 1-2 минуты...</div>';
-            document.getElementById('players').innerHTML = '';
+        // Пробуем разные возможные порты
+        const portsToTry = [ 5276];
 
-            try {
-                const response = await fetch(`${apiBase}/api/v1/parser/parse-team`, { method: 'POST' });
-                const data = await response.json();
-                document.getElementById('result').innerHTML = `<div class="status">✅ ${data.message || 'Парсинг завершён!'}</div>`;
-            } catch (error) {
-                document.getElementById('result').innerHTML = `<div class="status" style="background:#ffe0e0;">❌ Ошибка: ${error.message}</div>`;
-            }
-        };
-
-        document.getElementById('showBtn').onclick = async () => {
-            document.getElementById('result').innerHTML = '<div class="status">⏳ Загрузка игроков...</div>';
-
-            try {
-                const response = await fetch(`${apiBase}/api/v1/team`);
-                const players = await response.json();
-
-                if (players.length === 0) {
-                    document.getElementById('players').innerHTML = '<div class="status">📭 Нет данных. Сначала запустите парсинг.</div>';
-                    document.getElementById('result').innerHTML = '<div class="status">ℹ️ База данных пуста</div>';
-                    return;
+        async function findApiPort() {
+            for (const port of portsToTry) {
+                try {
+                    const url = `http://localhost:${port}/api/v1/health`;
+                    console.log(`Пробуем подключиться к ${url}`);
+                    const response = await fetch(url, { method: 'GET', mode: 'cors' });
+                    if (response.ok) {
+                        apiBase = `http://localhost:${port}`;
+                        document.getElementById('apiStatus').innerHTML = `<div class="status success">✅ Подключено к API: ${apiBase}</div>`;
+                        return true;
+                    }
+                } catch (e) {
+                    console.log(`Порт ${port} не работает: ${e.message}`);
                 }
-
-                let html = `<h2>📊 Всего игроков: ${players.length}</h2>`;
-                players.forEach(p => {
-                    html += `
-                        <div class="player-card">
-                            <div class="player-photo">
-                                <img src="${p.photoBase64 || 'https://via.placeholder.com/100?text=No+Photo'}" alt="${p.name}">
-                            </div>
-                            <div class="player-number">№${p.number}</div>
-                            <div class="player-name">${p.fullName || p.name}</div>
-                            <div class="player-position">${p.position}</div>
-                            <div class="stats">
-                                <span>🏆 Игры: ${p.games}</span>
-                                <span>⚽ Голы: ${p.goals}</span>
-                                <span>🎯 Передачи: ${p.assists}</span>
-                                <span>🟨 ЖК: ${p.yellowCards}</span>
-                                <span>🟥 КК: ${p.redCards}</span>
-                                ${p.goalsConceded ? `<span>🥅 Пропущено: ${p.goalsConceded}</span>` : ''}
-                                <span>🎂 Возраст: ${p.age || '?'} лет</span>
-                            </div>
-                        </div>
-                    `;
-                });
-                document.getElementById('players').innerHTML = html;
-                document.getElementById('result').innerHTML = '<div class="status">✅ Данные загружены</div>';
-            } catch (error) {
-                document.getElementById('result').innerHTML = `<div class="status" style="background:#ffe0e0;">❌ Ошибка загрузки: ${error.message}</div>`;
             }
-        };
+            document.getElementById('apiStatus').innerHTML = `<div class="status error">❌ Не удалось подключиться к API. Убедитесь, что проект запущен (dotnet run)</div>`;
+            return false;
+        }
 
-        document.getElementById('clearBtn').onclick = () => {
+        // Функция для вызова API
+        async function callApi(endpoint, method = 'GET', body = null) {
+            if (!apiBase) {
+                const connected = await findApiPort();
+                if (!connected) throw new Error('API не доступен');
+            }
+
+            const options = { method };
+            if (body) {
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify(body);
+            }
+
+            const response = await fetch(`${apiBase}${endpoint}`, options);
+            if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            return response.json();
+        }
+
+        // ========== ОБРАБОТЧИКИ КНОПОК ==========
+
+        // Парсинг игроков
+        document.getElementById('parseBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг игроков запущен, подождите 1-2 минуты...</div>';
             document.getElementById('players').innerHTML = '';
-            document.getElementById('result').innerHTML = '<div class="status">🗑️ Очищено</div>';
-        };
 
-
-        document.getElementById('parseMatchesBtn').onclick = async () => {
-            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг матчей...</div>';
             try {
-                const data = await callApi('/api/v1/parser/parse-matches', 'POST');
-                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message}</div>`;
+                const data = await callApi('/api/v1/parser/parse-team', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message || 'Парсинг завершён!'}</div>`;
             } catch (error) {
                 document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
             }
         };
 
+        // Показать игроков
+        document.getElementById('showBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Загрузка игроков...</div>';
+
+            try {
+                const players = await callApi('/api/v1/team');
+
+                if (players.length === 0) {
+                    document.getElementById('players').innerHTML = '<div class="status">📭 Нет данных. Сначала запустите парсинг игроков.</div>';
+                    document.getElementById('result').innerHTML = '<div class="status">ℹ️ База данных игроков пуста</div>';
+                    return;
+                }
+
+                let html = `<h2>📊 Всего игроков: ${players.length}</h2><div>`;
+                players.forEach(p => {
+                    html += `
+                            <div class="player-card">
+                                <div class="player-photo">
+                                    <img src="${p.photoBase64 || 'https://via.placeholder.com/100?text=No+Photo'}" alt="${p.name}">
+                                </div>
+                                <div class="player-number">№${p.number}</div>
+                                <div class="player-name">${p.fullName || p.name}</div>
+                                <div class="player-position">${p.position}</div>
+                                <div class="stats">
+                                    <span>🏆 Игры: ${p.games}</span>
+                                    <span>⚽ Голы: ${p.goals}</span>
+                                    <span>🎯 Передачи: ${p.assists}</span>
+                                    <span>🟨 ЖК: ${p.yellowCards}</span>
+                                    <span>🟥 КК: ${p.redCards}</span>
+                                    ${p.goalsConceded ? `<span>🥅 Пропущено: ${p.goalsConceded}</span>` : ''}
+                                    <span>🎂 Возраст: ${p.age || '?'} лет</span>
+                                </div>
+                            </div>
+                        `;
+                });
+                html += `</div>`;
+                document.getElementById('players').innerHTML = html;
+                document.getElementById('result').innerHTML = '<div class="status success">✅ Данные игроков загружены</div>';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка загрузки: ${error.message}</div>`;
+            }
+        };
+
+        // Парсинг матчей
+        document.getElementById('parseMatchesBtn').onclick = async () => {
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Парсинг матчей запущен...</div>';
+            document.getElementById('players').innerHTML = '';
+
+            try {
+                const data = await callApi('/api/v1/parser/parse-matches', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message || 'Парсинг матчей завершён!'}</div>`;
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
+        };
+
+        // Показать матчи
         document.getElementById('showMatchesBtn').onclick = async () => {
             document.getElementById('result').innerHTML = '<div class="status">⏳ Загрузка матчей...</div>';
 
             try {
-                const response = await fetch(`${apiBase}/api/v1/matches`);
-                const data = await response.json();
+                const data = await callApi('/api/v1/matches');
 
                 // Обрабатываем формат { home: [...], away: [...], hash: "..." }
                 const allMatches = [...(data.home || []), ...(data.away || [])];
@@ -220,7 +291,7 @@
                 // Предстоящие матчи
                 if (upcoming.length > 0) {
                     html += `<h3 style="color:#0057B3; margin-top:20px;">📅 Предстоящие матчи (${upcoming.length})</h3>`;
-                    html += `<div style="display: flex; flex-wrap: wrap; gap: 15px;">`;
+                    html += `<div class="matches-container">`;
                     upcoming.forEach(m => {
                         html += renderMatchCard(m);
                     });
@@ -230,7 +301,7 @@
                 // Прошедшие матчи
                 if (past.length > 0) {
                     html += `<h3 style="color:#666; margin-top:20px;">✅ Прошедшие матчи (${past.length})</h3>`;
-                    html += `<div style="display: flex; flex-wrap: wrap; gap: 15px;">`;
+                    html += `<div class="matches-container">`;
                     past.forEach(m => {
                         html += renderMatchCard(m);
                     });
@@ -241,19 +312,24 @@
                 document.getElementById('result').innerHTML = '<div class="status success">✅ Данные матчей загружены</div>';
 
             } catch (error) {
-                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка загрузки: ${error.message}</div>`;
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка загрузки матчей: ${error.message}</div>`;
             }
         };
 
         // Функция для отображения карточки матча
         function renderMatchCard(match) {
+            // Определяем, какой это матч (домашний/выездной)
             const isHome = match.isHome;
-            const homeTeam = isHome ? "Газпром-Югра" : match.team1;
-            const awayTeam = isHome ? match.team2 : "Газпром-Югра";
-            const isUpcoming = match.score === "-:-" || match.status === "upcoming";
+
+            // ВАЖНО: в БД team1 и team2 — это порядок на сайте, НЕ всегда Газпром-Югра!
+            // Просто отображаем team1 слева, team2 справа, и их логотипы
+            const leftTeam = match.team1 || "?";
+            const rightTeam = match.team2 || "?";
+            const leftLogo = match.team1Logo;
+            const rightLogo = match.team2Logo;
 
             return `
-        <div class="match-card" style="background: white; border: 1px solid #ddd; border-radius: 12px; padding: 15px; width: 320px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+        <div class="match-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <span style="background: ${isHome ? '#28A745' : '#FFC107'}; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">
                     ${isHome ? '🏠 Дома' : '✈️ Выезд'}
@@ -262,12 +338,19 @@
             </div>
             
             <div style="display: flex; align-items: center; justify-content: space-between; margin: 10px 0;">
+                <!-- Команда слева (team1) -->
                 <div style="text-align: center; flex: 1;">
-                    <div style="font-weight: bold; font-size: 14px;">${homeTeam}</div>
+                    ${leftLogo ? `<img src="${leftLogo}" style="width: 40px; height: 40px; object-fit: contain; display: block; margin: 0 auto 5px; border-radius: 50%;">` : ''}
+                    <div style="font-weight: bold; font-size: 14px;">${leftTeam}</div>
                 </div>
+                
+                <!-- Счёт -->
                 <div style="font-size: 20px; font-weight: bold; margin: 0 10px; color: #0057B3;">${match.score || '-:-'}</div>
+                
+                <!-- Команда справа (team2) -->
                 <div style="text-align: center; flex: 1;">
-                    <div style="font-weight: bold; font-size: 14px;">${awayTeam}</div>
+                    ${rightLogo ? `<img src="${rightLogo}" style="width: 40px; height: 40px; object-fit: contain; display: block; margin: 0 auto 5px; border-radius: 50%;">` : ''}
+                    <div style="font-weight: bold; font-size: 14px;">${rightTeam}</div>
                 </div>
             </div>
             
@@ -275,11 +358,20 @@
                 <div>📅 ${match.date || '?'} ${match.weekday ? `(${match.weekday})` : ''}</div>
                 <div>⏰ ${match.time || '?'}</div>
                 <div>📍 ${match.city || '?'}, ${match.stadium || '?'}</div>
-                ${match.score !== '-:-' && match.score !== '' ? `<div>${isUpcoming ? '' : '🏆 Завершён'}</div>` : '<div>⏳ Ожидается</div>'}
+                <div>${match.score === '-:-' || match.score === '' ? '⏳ Ожидается' : '🏆 Завершён'}</div>
             </div>
         </div>
     `;
         }
+
+        // Очистка
+        document.getElementById('clearBtn').onclick = () => {
+            document.getElementById('players').innerHTML = '';
+            document.getElementById('result').innerHTML = '<div class="status">🗑️ Очищено</div>';
+        };
+
+        // Проверяем подключение при загрузке
+        findApiPort();
     </script>
 </body>
 </html>

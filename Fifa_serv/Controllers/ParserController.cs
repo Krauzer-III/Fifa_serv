@@ -28,6 +28,21 @@ public class ParserController : ControllerBase
         }
     }
 
+
+    [HttpPost("parse-matches")]
+    public async Task<IActionResult> ParseMatches()
+    {
+        try
+        {
+            await _parser.ParseMatchesAsync();
+            return Ok(new { message = "Парсинг матчей успешно выполнен" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
     [HttpGet("test")]
     public IActionResult Test()
     {

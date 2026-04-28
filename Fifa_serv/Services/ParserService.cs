@@ -289,42 +289,68 @@ public class ParserService
 
     public async Task ParseMatchesAsync()
     {
-        // Базовый URL календаря (можно будет подставить параметры для всех туров)
         var calendarUrl = "https://superliga.rfs.ru/tournament/1054805/calendar";
 
         Console.WriteLine("Начинаем парсинг матчей...");
 
-        // Загружаем главную страницу календаря
         var html = await _httpClient.GetStringAsync(calendarUrl);
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
 
-        // Ищем все элементы матчей
-        var matchNodes = doc.DocumentNode.SelectNodes("//li[contains(@class, 'timetable__item')]");
+        // Ищем все блоки с датами
+        var dateBlocks = doc.DocumentNode.SelectNodes("//div[contains(@class, 'calendar__date')]");
 
-        if (matchNodes == null || matchNodes.Count == 0)
+        if (dateBlocks == null || dateBlocks.Count == 0)
         {
-            Console.WriteLine("Матчи не найдены. Возможно, сайт использует динамическую загрузку.");
+            Console.WriteLine("Не найдены блоки с датами");
             return;
         }
 
-        Console.WriteLine($"Найдено {matchNodes.Count} матчей. Фильтруем по участию Газпром-Югра...");
-
-        foreach (var node in matchNodes)
+        foreach (var dateBlock in dateBlocks)
         {
-            await ParseSingleMatch(node);
+            // Извлекаем дату и день недели
+            var dateHeader = dateBlock.SelectSingleNode(".//h3");
+            if (dateHeader == null) continue;
+
+            var dateText = dateHeader.InnerText.Trim();
+            var dateMatch = Regex.Match(dateText, @"(\d+)\s+(\w+)\s+(\d+),\s+(\w+)");
+            if (!dateMatch.Success) continue;
+
+            var day = dateMatch.Groups[1].Value;
+            var month = dateMatch.Groups[2].Value;
+            var year = dateMatch.Groups[3].Value;
+            var weekday = dateMatch.Groups[4].Value;
+
+            // Форматируем дату в ISO формат (yyyy-MM-dd)
+            var monthNumber = ParseMonth(month);
+            var formattedDate = $"{year}-{monthNumber}-{day.PadLeft(2, '0')}";
+
+            // Ищем все матчи в этом блоке
+            var matchNodes = dateBlock.SelectNodes(".//li[contains(@class, 'timetable__item')]");
+            if (matchNodes == null) continue;
+
+            Console.WriteLine($"\nДата: {formattedDate} ({weekday}), матчей: {matchNodes.Count}");
+
+            foreach (var matchNode in matchNodes)
+            {
+                await ParseSingleMatch(matchNode, formattedDate, weekday);
+            }
         }
 
-        Console.WriteLine("Парсинг матчей завершён!");
+        Console.WriteLine("\nПарсинг матчей завершён!");
     }
 
-    private async Task ParseSingleMatch(HtmlNode matchNode)
+    private async Task ParseSingleMatch(HtmlNode matchNode, string currentDate, string currentWeekday)
     {
         try
         {
-            // Проверяем, участвует ли Газпром-Югра
-            var teamLinks = matchNode.SelectNodes(".//a[contains(@class, 'timetable__team')]");
-            if (teamLinks == null || teamLinks.Count < 2) return;
+            // 1. Ищем все команды в матче
+            var teamElements = matchNode.SelectNodes(".//a[contains(@class, 'timetable__team')]");
+            if (teamElements == null || teamElements.Count < 2)
+            {
+                Console.WriteLine("  Не найдены команды в матче");
+                return;
+            }
 
             string team1Name = null;
             string team2Name = null;
@@ -332,28 +358,39 @@ public class ParserService
             string team2Logo = null;
             int? team1Id = null;
             int? team2Id = null;
+            bool isHome = false;
 
-            foreach (var teamLink in teamLinks)
+            foreach (var teamElement in teamElements)
             {
-                var nameNode = teamLink.SelectSingleNode(".//div[contains(@class, 'timetable__team-name')]");
-                var logoNode = teamLink.SelectSingleNode(".//img[contains(@class, 'timetable__team-img')]");
-                var href = teamLink.GetAttributeValue("href", "");
-
-                if (nameNode == null) continue;
-
-                var teamName = nameNode.InnerText.Trim();
-                var logoUrl = logoNode?.GetAttributeValue("src", "") ?? "";
-
-                // Извлекаем ID команды из href (например, /tournament/.../application?team_id=1258505)
+                // Извлекаем ID команды из href
+                var href = teamElement.GetAttributeValue("href", "");
                 var teamIdMatch = Regex.Match(href, @"team_id=(\d+)");
                 var teamId = teamIdMatch.Success ? int.Parse(teamIdMatch.Groups[1].Value) : (int?)null;
 
-                if (teamId == 1258505) // ID команды Газпром-Югра
+                // Название команды
+                var nameNode = teamElement.SelectSingleNode(".//div[contains(@class, 'timetable__team-name')]");
+                var teamName = nameNode?.InnerText.Trim() ?? "";
+
+                // Логотип команды
+                string logoUrl = null;
+                var logoNode = teamElement.SelectSingleNode(".//img[contains(@class, 'timetable__team-img')]");
+                if (logoNode != null)
                 {
-                    // Это наш клуб
+                    logoUrl = logoNode.GetAttributeValue("src", "");
+                    if (!string.IsNullOrEmpty(logoUrl) && logoUrl.StartsWith("/"))
+                        logoUrl = "https://superliga.rfs.ru" + logoUrl;
+                }
+
+                // Определяем, наш ли это клуб (Газпром-Югра)
+                if (teamId == 1258505)
+                {
+                    // Проверяем, какая позиция у нашего клуба (первая или вторая в DOM)
+                    // Если наш клуб первый в списке teams -> домашний матч
+                    isHome = teamElements.IndexOf(teamElement) == 0;
                     continue;
                 }
 
+                // Заполняем данные соперника
                 if (team1Id == null)
                 {
                     team1Name = teamName;
@@ -368,77 +405,56 @@ public class ParserService
                 }
             }
 
-            // Если не нашли матч с участием Газпром-Югра, пропускаем
-            if (team1Id == null && team2Id == null) return;
-
-            // Заполняем названия (если одна из команд — наш клуб)
-            bool isHome = false;
-            if (team1Id == 1258505)
+            // Если не нашли соперника, выходим
+            if (team1Id == null && team2Id == null)
             {
-                isHome = true;
-                // Меняем местами, чтобы team1 был соперник, team2 - наш клуб? 
-                // Для единообразия оставим как есть, просто запомним isHome
+                Console.WriteLine("  Не найден соперник для Газпром-Югра");
+                return;
             }
 
-            // Счёт
+            // 2. Счёт матча
             var scoreNode = matchNode.SelectSingleNode(".//div[contains(@class, 'timetable__score-main')]");
             var score = scoreNode?.InnerText.Trim() ?? "-:-";
 
-            // Ссылка на страницу матча
+            // 3. Ссылка на страницу матча
             var matchLink = matchNode.SelectSingleNode(".//a[contains(@class, 'timetable__score')]");
             var matchUrl = matchLink != null ? "https://superliga.rfs.ru" + matchLink.GetAttributeValue("href", "") : "";
 
-            // Время матча
+            // 4. Время матча
             var timeNode = matchNode.SelectSingleNode(".//span[contains(@class, 'timetable__time')]");
             var time = timeNode?.InnerText.Trim() ?? "";
 
-            // Место проведения (стадион)
+            // 5. Место проведения (стадион)
             var placeNode = matchNode.SelectSingleNode(".//div[contains(@class, 'timetable__place')]");
-            var stadium = placeNode?.SelectSingleNode(".//span[contains(@class, 'timetable__place-name')]")?.InnerText.Trim() ?? "";
-            var stadiumFull = placeNode?.GetAttributeValue("title", "") ?? stadium;
+            string stadium = "";
+            string stadiumFull = "";
+            string city = "";
 
-            // Город (можно попробовать извлечь из адреса или стадиона)
-            var city = ExtractCity(stadiumFull);
+            if (placeNode != null)
+            {
+                stadium = placeNode.SelectSingleNode(".//span[contains(@class, 'timetable__place-name')]")?.InnerText.Trim() ?? "";
+                stadiumFull = placeNode.GetAttributeValue("title", "") ?? stadium;
+                city = ExtractCity(stadiumFull);
+            }
 
-            // Номер тура
+            // 6. Номер тура
             var roundNode = matchNode.SelectSingleNode(".//span[contains(@class, 'timetable__round')]");
             var roundText = roundNode?.InnerText.Trim() ?? "";
             var round = ParseInt(Regex.Match(roundText, @"\d+").Value);
 
-            // Дата и день недели (нужно получить из контекста страницы)
-            // Для простоты пока оставим пустыми, потом можно доработать
-            var date = DateTime.Now.ToString("yyyy-MM-dd");
-            var weekday = "";
+            // 7. Дата и день недели (передаются из метода ParseMatchesAsync)
+            var date = currentDate;
+            var weekday = currentWeekday;
+            var status = score == "-:-" ? "upcoming" : "finished";
 
-            // Получаем день недели из родительских элементов
-            var parent = matchNode.ParentNode;
-            while (parent != null)
-            {
-                var dateHeader = parent.SelectSingleNode(".//h3[contains(@class, 'calendar__date')]");
-                if (dateHeader != null)
-                {
-                    var dateText = dateHeader.InnerText.Trim();
-                    // Парсим "25 августа 2025, понедельник"
-                    var dateMatch = Regex.Match(dateText, @"(\d+)\s+(\w+)\s+(\d+),\s+(\w+)");
-                    if (dateMatch.Success)
-                    {
-                        var day = dateMatch.Groups[1].Value;
-                        var month = dateMatch.Groups[2].Value;
-                        var year = dateMatch.Groups[3].Value;
-                        weekday = dateMatch.Groups[4].Value;
-                        date = $"{year}-{ParseMonth(month)}-{day.PadLeft(2, '0')}";
-                    }
-                    break;
-                }
-                parent = parent.ParentNode;
-            }
+            Console.WriteLine($"  Матч: {team1Name} vs {team2Name}, счёт: {score}, дом/выезд: {(isHome ? "дома" : "выезд")}, тур: {round}, дата: {date}");
 
-            // Создаём объект матча
-            var match = new Fifa_serv.Models.Match
+            // 8. Создаём объект матча
+            var match = new Models.Match  
             {
                 Round = round,
-                Team1 = team1Name ?? "Газпром-Югра",
-                Team2 = team2Name ?? "Газпром-Югра",
+                Team1 = team1Name ?? "Неизвестно",
+                Team2 = team2Name ?? "Неизвестно",
                 Score = score,
                 Date = date,
                 Weekday = weekday,
@@ -447,31 +463,31 @@ public class ParserService
                 Stadium = stadium,
                 StadiumAddress = stadiumFull,
                 IsHome = isHome,
-                Status = score == "-:-" ? "upcoming" : "finished",
+                Status = status,
                 MatchUrl = matchUrl,
                 Team1Logo = !string.IsNullOrEmpty(team1Logo) ? await DownloadImageAsBase64Async(team1Logo) : "",
                 Team2Logo = !string.IsNullOrEmpty(team2Logo) ? await DownloadImageAsBase64Async(team2Logo) : ""
             };
 
+            // 9. Вычисляем хеш и сохраняем в БД
             match.Hash = _hashService.ComputeHash(match);
 
-            // Сохраняем в базу
             var existing = _db.Matches.FindOne(x => x.MatchUrl == matchUrl);
             if (existing != null)
             {
                 match.Id = existing.Id;
                 _db.Matches.Update(match);
-                Console.WriteLine($"  Обновлён матч: {match.Team1} vs {match.Team2}");
+                Console.WriteLine($"    Обновлён матч: {match.Team1} vs {match.Team2}");
             }
             else
             {
                 _db.Matches.Insert(match);
-                Console.WriteLine($"  Добавлен матч: {match.Team1} vs {match.Team2}");
+                Console.WriteLine($"    Добавлен матч: {match.Team1} vs {match.Team2}");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при парсинге матча: {ex.Message}");
+            Console.WriteLine($"  Ошибка при парсинге матча: {ex.Message}");
         }
     }
 
