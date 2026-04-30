@@ -7,6 +7,7 @@ public class Match
     [BsonId]
     public int Id { get; set; }
     public int Round { get; set; }
+    public string MatchType { get; set; } = string.Empty; // Регулярный или плейоф
     public string Team1 { get; set; } = string.Empty;
     public string Team2 { get; set; } = string.Empty;
     public string Score { get; set; } = string.Empty;          // "3:2" или "-:-"

@@ -144,6 +144,9 @@
             <button id="parseMatchesBtn">⚽ Парсить матчи</button>
             <button id="showMatchesBtn">📅 Показать матчи из БД</button>
             <button id="clearBtn">🗑️ Очистить</button>
+            <button id="clearMatchesBtn" style="background: #dc3545;">🗑️ Очистить матчи</button>
+            <button id="clearPlayersBtn" style="background: #dc3545;">🗑️ Очистить игроков</button>
+            <button id="clearAllBtn" style="background: #721c24;">⚠️ Очистить ВСЮ БД</button>
         </div>
 
         <div id="result" class="status">Нажмите кнопку для запуска</div>
@@ -368,6 +371,50 @@
         document.getElementById('clearBtn').onclick = () => {
             document.getElementById('players').innerHTML = '';
             document.getElementById('result').innerHTML = '<div class="status">🗑️ Очищено</div>';
+        };
+
+
+        // Очистка матчей
+        document.getElementById('clearMatchesBtn').onclick = async () => {
+            if (!confirm('Удалить ВСЕ матчи из базы данных?')) return;
+
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Очистка матчей...</div>';
+            try {
+                const data = await callApi('/api/v1/parser/clear-matches', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message}</div>`;
+                document.getElementById('players').innerHTML = '';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
+        };
+
+        // Очистка игроков
+        document.getElementById('clearPlayersBtn').onclick = async () => {
+            if (!confirm('Удалить ВСЕХ игроков из базы данных?')) return;
+
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Очистка игроков...</div>';
+            try {
+                const data = await callApi('/api/v1/parser/clear-players', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message}</div>`;
+                document.getElementById('players').innerHTML = '';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
+        };
+
+        // Полная очистка БД
+        document.getElementById('clearAllBtn').onclick = async () => {
+            if (!confirm('⚠️ ВНИМАНИЕ! Это удалит ВСЕ данные (игроки, матчи, новости, информацию о клубе). Продолжить?')) return;
+            if (!confirm('ПОСЛЕДНЕЕ ПРЕДУПРЕЖДЕНИЕ! Данные будут удалены безвозвратно. Вы уверены?')) return;
+
+            document.getElementById('result').innerHTML = '<div class="status">⏳ Очистка всей базы данных...</div>';
+            try {
+                const data = await callApi('/api/v1/parser/clear-database', 'POST');
+                document.getElementById('result').innerHTML = `<div class="status success">✅ ${data.message}<br>Удалено: ${JSON.stringify(data.deleted)}</div>`;
+                document.getElementById('players').innerHTML = '';
+            } catch (error) {
+                document.getElementById('result').innerHTML = `<div class="status error">❌ Ошибка: ${error.message}</div>`;
+            }
         };
 
         // Проверяем подключение при загрузке
