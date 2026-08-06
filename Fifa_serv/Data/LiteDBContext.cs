@@ -22,4 +22,5 @@ public class LiteDbContext
     public ILiteCollection<Match> Matches => Database.GetCollection<Match>("matches");
     public ILiteCollection<News> News => Database.GetCollection<News>("news");
     public ILiteCollection<ClubInfo> ClubInfo => Database.GetCollection<ClubInfo>("clubinfo");
+    public ILiteCollection<TeamRating> TeamRatings => Database.GetCollection<TeamRating>("team_ratings");
 }

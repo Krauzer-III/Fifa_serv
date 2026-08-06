@@ -1,5 +1,6 @@
 using Fifa_serv.Data;
 using Fifa_serv.Services;
+using Fifa_serv.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +13,8 @@ builder.Services.AddScoped<ParserService>();
 // Регистрируем наши сервисы
 builder.Services.AddSingleton<LiteDbContext>();
 builder.Services.AddScoped<HashService>();
+
+builder.Services.AddFifaDataSync();
 
 // CORS для Android приложения
 builder.Services.AddCors(options =>
