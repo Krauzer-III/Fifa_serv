@@ -15,7 +15,12 @@ public class LiteDbContext
         // Создаём индексы для быстрого поиска
         Database.GetCollection<Player>("players").EnsureIndex(x => x.Number);
         Database.GetCollection<Match>("matches").EnsureIndex(x => x.Date);
-        Database.GetCollection<News>("news").EnsureIndex(x => x.Date);
+        Database.GetCollection<News>("news").EnsureIndex(x => x.NewsUrl, unique: true);
+        var ratings = Database.GetCollection<TeamRating>("team_ratings");
+
+        ratings.EnsureIndex(x => x.Position);
+        ratings.EnsureIndex(x => x.TeamId);
+        ratings.EnsureIndex(x => x.TeamName);
     }
 
     public ILiteCollection<Player> Players => Database.GetCollection<Player>("players");

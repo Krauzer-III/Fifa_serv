@@ -25,52 +25,64 @@ public class ParserService
     }
 
     // Главный метод: парсим всю команду
-    public async Task ParseTeamAsync()
+    public async Task<int> ParseTeamAsync()
     {
-        var teamUrl = "https://superliga.rfs.ru/tournament/1054805/teams/application?team_id=1258505";
+        const string teamUrl =
+            "https://superliga.rfs.ru/tournament/1054805/teams/application?team_id=1258505";
 
-        Console.WriteLine("Начинаем парсинг команды...");
-        var html = await _httpClient.GetStringAsync(teamUrl);
+        using var response = await _httpClient.GetAsync(teamUrl);
+        response.EnsureSuccessStatusCode();
+
+        var html = await response.Content.ReadAsStringAsync();
+
         var doc = new HtmlDocument();
         doc.LoadHtml(html);
 
-        // Ищем таблицу с игроками
-        var table = doc.DocumentNode.SelectSingleNode("//table[contains(@class, 'table--team')]");
-        if (table == null)
+        var rows = doc.DocumentNode.SelectNodes(
+            "//table[contains(@class, 'table--team')]//tbody/tr"
+        );
+
+        if (rows == null || rows.Count == 0)
         {
-            Console.WriteLine("Таблица с игроками не найдена!");
-            return;
+            throw new InvalidOperationException(
+                "На странице команды не найдены строки игроков. " +
+                "Вероятно, изменилась HTML-разметка сайта."
+            );
         }
 
-        var rows = table.SelectNodes(".//tbody//tr");
-        if (rows == null)
-        {
-            Console.WriteLine("Строки с игроками не найдены!");
-            return;
-        }
-
-        Console.WriteLine($"Найдено {rows.Count} игроков. Начинаем обработку...");
+        var processed = 0;
 
         foreach (var row in rows)
         {
-            await ParsePlayerRow(row);
+            if (await ParsePlayerRow(row))
+            {
+                processed++;
+            }
         }
 
-        Console.WriteLine("Парсинг завершён!");
+        return processed;
     }
 
     // Парсим одну строку таблицы
-    private async Task ParsePlayerRow(HtmlNode row)
+    private async Task<bool> ParsePlayerRow(HtmlNode row)
     {
         try
         {
-            // Номер игрока
-            var numberTd = row.SelectSingleNode(".//td[1]");
-            var number = int.Parse(numberTd?.InnerText.Trim() ?? "0");
+            var numberText = row.SelectSingleNode(".//td[1]")?.InnerText.Trim();
 
-            // Ссылка на страницу игрока
-            var playerLink = row.SelectSingleNode(".//a[contains(@class, 'table__player')]");
-            if (playerLink == null) return;
+            if (!int.TryParse(numberText, out var number))
+            {
+                return false;
+            }
+
+            var playerLink = row.SelectSingleNode(
+                ".//a[contains(@class, 'table__player')]"
+            );
+
+            if (playerLink == null)
+            {
+                return false;
+            }
 
             var playerUrl = "https://superliga.rfs.ru" + playerLink.GetAttributeValue("href", "");
             var playerName = playerLink.InnerText.Trim();
@@ -105,6 +117,7 @@ public class ParserService
             };
 
             // Сохраняем в базу
+            player.Hash = _hashService.ComputeHash(player);
             var existing = _db.Players.FindOne(x => x.Number == number);
             if (existing != null)
             {
@@ -117,10 +130,12 @@ public class ParserService
                 _db.Players.Insert(player);
                 Console.WriteLine($"    Добавлен: {playerName}");
             }
+            return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Ошибка при парсинге строки: {ex.Message}");
+            Console.WriteLine($"Ошибка при парсинге строки: {ex}");
+            return false;
         }
     }
 
@@ -636,5 +651,515 @@ public class ParserService
             "декабря" => "12",
             _ => "01"
         };
+    }
+
+    public async Task<int> ParseTeamRatingsAsync(
+    string link,
+    string ratingType = "Основной")
+    {
+        Console.WriteLine(
+            $"Начинаем парсинг рейтинга: {ratingType}");
+
+        var html = await _httpClient.GetStringAsync(link);
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var rows = doc.DocumentNode.SelectNodes(
+            "//ul[contains(concat(' ', normalize-space(@class), ' '), " +
+            "' custom-table__body ')]" +
+            "/li[contains(concat(' ', normalize-space(@class), ' '), " +
+            "' custom-table__line ')]"
+        );
+
+        if (rows == null || rows.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Не найдены строки рейтинга: {ratingType}");
+        }
+
+        var processed = 0;
+
+        foreach (var row in rows)
+        {
+            try
+            {
+                var positionNode = row.SelectSingleNode(
+                    ".//div[contains(@class, " +
+                    "'custom-table__number-wrapper')]"
+                );
+
+                var position = ParseInt(
+                    CleanRatingText(positionNode));
+
+                var teamLink = row.SelectSingleNode(
+                    ".//a[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__team ')]"
+                );
+
+                var teamNameNode = row.SelectSingleNode(
+                    ".//div[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__team-name ')]"
+                );
+
+                if (position <= 0 ||
+                    teamLink == null ||
+                    teamNameNode == null)
+                {
+                    continue;
+                }
+
+                var relativeTeamUrl = teamLink.GetAttributeValue(
+                    "href",
+                    string.Empty);
+
+                var teamUrl = MakeRatingAbsoluteUrl(relativeTeamUrl);
+                var teamId = ExtractRatingTeamId(relativeTeamUrl);
+                var teamName = CleanRatingText(teamNameNode);
+
+                var logoNode = teamLink.SelectSingleNode(
+                    ".//img[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__team-img ')]"
+                );
+
+                var logoUrl = MakeRatingAbsoluteUrl(
+                    logoNode?.GetAttributeValue("src", string.Empty)
+                    ?? string.Empty);
+
+                var logoBase64 = string.IsNullOrWhiteSpace(logoUrl)
+                    ? string.Empty
+                    : await DownloadImageAsBase64Async(logoUrl);
+
+                /*
+                 * Обычные числовые поля:
+                 * 0 — И
+                 * 1 — В
+                 * 2 — ВП
+                 * 3 — ПП
+                 * 4 — П
+                 * 5 — О
+                 */
+                var valueNodes = row.SelectNodes(
+                    ".//div[" +
+                    "contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__var ') and " +
+                    "not(contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__var--diff '))" +
+                    "]" +
+                    "/div[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__content ')]"
+                );
+
+                var values = valueNodes?
+                    .Select(node => ParseInt(CleanRatingText(node)))
+                    .ToList()
+                    ?? new List<int>();
+
+                if (values.Count < 6)
+                {
+                    Console.WriteLine(
+                        $"Пропущена команда {teamName}: " +
+                        $"найдено полей {values.Count} вместо 6");
+
+                    continue;
+                }
+
+                var goalsNode = row.SelectSingleNode(
+                    ".//div[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__var--diff ')]" +
+                    "//div[contains(concat(' ', normalize-space(@class), ' '), " +
+                    "' custom-table__content ')]"
+                );
+
+                var goals = ParseRatingGoals(
+                    CleanRatingText(goalsNode));
+
+                var rating = new TeamRating
+                {
+                    Position = position,
+                    TeamId = teamId,
+                    TeamName = teamName,
+                    TeamUrl = teamUrl,
+                    LogoBase64 = logoBase64,
+
+                    Games = values[0],
+                    Wins = values[1],
+                    WinsAfterPenalties = values[2],
+                    LossesAfterPenalties = values[3],
+                    Losses = values[4],
+
+                    GoalsFor = goals.goalsFor,
+                    GoalsAgainst = goals.goalsAgainst,
+                    Points = values[5],
+
+                    RatingType = ratingType
+                };
+
+                rating.Hash = _hashService.ComputeHash(new
+                {
+                    rating.Position,
+                    rating.TeamId,
+                    rating.TeamName,
+                    rating.TeamUrl,
+                    rating.LogoBase64,
+                    rating.Games,
+                    rating.Wins,
+                    rating.WinsAfterPenalties,
+                    rating.LossesAfterPenalties,
+                    rating.Losses,
+                    rating.GoalsFor,
+                    rating.GoalsAgainst,
+                    rating.Points,
+                    rating.RatingType
+                });
+
+                var existing = _db.TeamRatings.FindOne(x =>
+                    x.TeamId == rating.TeamId &&
+                    x.RatingType == ratingType);
+
+                if (existing == null)
+                {
+                    _db.TeamRatings.Insert(rating);
+
+                    Console.WriteLine(
+                        $"Добавлена: {rating.Position}. " +
+                        $"{rating.TeamName} [{ratingType}]");
+                }
+                else if (existing.Hash != rating.Hash)
+                {
+                    rating.Id = existing.Id;
+                    _db.TeamRatings.Update(rating);
+
+                    Console.WriteLine(
+                        $"Обновлена: {rating.Position}. " +
+                        $"{rating.TeamName} [{ratingType}]");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"Без изменений: {rating.TeamName} [{ratingType}]");
+                }
+
+                processed++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"Ошибка обработки строки рейтинга: {ex.Message}");
+            }
+        }
+
+        if (processed == 0)
+        {
+            throw new InvalidOperationException(
+                $"Не обработано ни одной команды: {ratingType}");
+        }
+
+        Console.WriteLine(
+            $"Рейтинг {ratingType} обработан: {processed} команд");
+
+        return processed;
+    }
+    private static string CleanRatingText(HtmlNode? node)
+    {
+        if (node == null)
+        {
+            return string.Empty;
+        }
+
+        return HtmlEntity
+            .DeEntitize(node.InnerText)
+            .Replace('\u00A0', ' ')
+            .Trim();
+    }
+
+    private static string MakeRatingAbsoluteUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var absolute))
+        {
+            return absolute.ToString();
+        }
+
+        return new Uri(
+            new Uri("https://superliga.rfs.ru"),
+            url
+        ).ToString();
+    }
+
+    private static int? ExtractRatingTeamId(string url)
+    {
+        var match = Regex.Match(
+            url ?? string.Empty,
+            @"(?:\?|&)team_id=(\d+)",
+            RegexOptions.IgnoreCase);
+
+        return match.Success &&
+               int.TryParse(match.Groups[1].Value, out var teamId)
+            ? teamId
+            : null;
+    }
+
+    private static (int goalsFor, int goalsAgainst)
+        ParseRatingGoals(string text)
+    {
+        var match = Regex.Match(
+            text ?? string.Empty,
+            @"(\d+)\s*[-–—:]\s*(\d+)");
+
+        if (!match.Success)
+        {
+            return (0, 0);
+        }
+
+        var goalsFor = int.TryParse(
+            match.Groups[1].Value,
+            out var parsedFor)
+                ? parsedFor
+                : 0;
+
+        var goalsAgainst = int.TryParse(
+            match.Groups[2].Value,
+            out var parsedAgainst)
+                ? parsedAgainst
+                : 0;
+
+        return (goalsFor, goalsAgainst);
+    }
+
+
+    public async Task<int> ParseNewsAsync(
+    string link = "https://mfkgazprom-ugra.ru/news/")
+    {
+        Console.WriteLine("Начинаем парсинг новостей...");
+
+        var html = await _httpClient.GetStringAsync(link);
+
+        var document = new HtmlDocument();
+        document.LoadHtml(html);
+
+        var newsNodes = document.DocumentNode.SelectNodes(
+            "//div[" +
+            "contains(concat(' ', normalize-space(@class), ' '), ' post ') and " +
+            "contains(concat(' ', normalize-space(@class), ' '), ' post-type-1 ')" +
+            "]"
+        );
+
+        if (newsNodes == null || newsNodes.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Не найдены блоки новостей div.post.post-type-1. " +
+                "Возможно, изменилась HTML-разметка сайта."
+            );
+        }
+
+        var processed = 0;
+
+        foreach (var newsNode in newsNodes)
+        {
+            try
+            {
+                var saved = await ParseNewsNodeAsync(newsNode);
+
+                if (saved)
+                {
+                    processed++;
+                }
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine(
+                    $"Ошибка обработки новости: {exception.Message}"
+                );
+            }
+        }
+
+        if (processed == 0)
+        {
+            throw new InvalidOperationException(
+                "Блоки новостей найдены, но ни одну новость " +
+                "не удалось обработать."
+            );
+        }
+
+        Console.WriteLine(
+            $"Парсинг новостей завершён. Обработано: {processed}"
+        );
+
+        return processed;
+    }
+
+    private async Task<bool> ParseNewsNodeAsync(HtmlNode newsNode)
+    {
+        var linkNode = newsNode.SelectSingleNode(".//a[@href]");
+
+        if (linkNode == null)
+        {
+            Console.WriteLine(
+                "Пропущена новость: не найдена ссылка."
+            );
+
+            return false;
+        }
+
+        var relativeNewsUrl = linkNode.GetAttributeValue(
+            "href",
+            string.Empty
+        );
+
+        var newsUrl = MakeNewsAbsoluteUrl(relativeNewsUrl);
+
+        if (string.IsNullOrWhiteSpace(newsUrl))
+        {
+            Console.WriteLine(
+                "Пропущена новость: ссылка пустая."
+            );
+
+            return false;
+        }
+
+        var titleNode = newsNode.SelectSingleNode(
+            ".//div[" +
+            "contains(concat(' ', normalize-space(@class), ' '), ' text ')" +
+            "]/p"
+        );
+
+        var title = CleanNewsText(titleNode);
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            Console.WriteLine(
+                $"Пропущена новость {newsUrl}: заголовок пустой."
+            );
+
+            return false;
+        }
+
+        var categoryNode = newsNode.SelectSingleNode(
+            ".//div[" +
+            "contains(concat(' ', normalize-space(@class), ' '), ' category ')" +
+            "]" +
+            "//div[" +
+            "contains(concat(' ', normalize-space(@class), ' '), ' td ')" +
+            "]"
+        );
+
+        var category = CleanNewsText(categoryNode);
+
+        var imageUrl = ExtractNewsImageUrl(newsNode);
+        imageUrl = MakeNewsAbsoluteUrl(imageUrl);
+
+        var imageBase64 = string.IsNullOrWhiteSpace(imageUrl)
+            ? string.Empty
+            : await DownloadImageAsBase64Async(imageUrl);
+
+        var news = new News
+        {
+            Title = title,
+            Category = category,
+            NewsUrl = newsUrl,
+            ImageBase64 = imageBase64
+        };
+
+        news.Hash = _hashService.ComputeHash(news);
+
+        var existing = _db.News.FindOne(
+            x => x.NewsUrl == news.NewsUrl
+        );
+
+        if (existing == null)
+        {
+            _db.News.Insert(news);
+
+            Console.WriteLine(
+                $"Добавлена новость: {news.Title}"
+            );
+
+            return true;
+        }
+
+        if (existing.Hash == news.Hash)
+        {
+            Console.WriteLine(
+                $"Без изменений: {news.Title}"
+            );
+
+            return true;
+        }
+
+        news.Id = existing.Id;
+        _db.News.Update(news);
+
+        Console.WriteLine(
+            $"Обновлена новость: {news.Title}"
+        );
+
+        return true;
+    }
+
+    private static string ExtractNewsImageUrl(HtmlNode newsNode)
+    {
+        var style = newsNode.GetAttributeValue(
+            "style",
+            string.Empty
+        );
+
+        if (string.IsNullOrWhiteSpace(style))
+        {
+            return string.Empty;
+        }
+
+        style = HtmlEntity.DeEntitize(style);
+
+        var match = Regex.Match(
+            style,
+            @"url\(\s*['""]?(?<url>[^'"")]+)['""]?\s*\)",
+            RegexOptions.IgnoreCase
+        );
+
+        return match.Success
+            ? match.Groups["url"].Value.Trim()
+            : string.Empty;
+    }
+
+    private static string CleanNewsText(HtmlNode? node)
+    {
+        if (node == null)
+        {
+            return string.Empty;
+        }
+
+        return HtmlEntity
+            .DeEntitize(node.InnerText)
+            .Replace('\u00A0', ' ')
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Replace("\t", " ")
+            .Trim();
+    }
+
+    private static string MakeNewsAbsoluteUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        if (Uri.TryCreate(
+            url,
+            UriKind.Absolute,
+            out var absoluteUri))
+        {
+            return absoluteUri.ToString();
+        }
+
+        return new Uri(
+            new Uri("https://mfkgazprom-ugra.ru/"),
+            url
+        ).ToString();
     }
 }

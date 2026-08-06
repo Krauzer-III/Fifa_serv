@@ -9,9 +9,6 @@ public static class ServiceCollectionExtensions
     {
         services.AddScoped<EntityHashDiffService>();
         services.AddScoped<CommonHashService>();
-        services.AddScoped<DataRefreshService>();
-        services.AddHttpClient<TeamRatingParser>(ConfigureHttpClient);
-        services.AddHttpClient<NewsParser>(ConfigureHttpClient);
         services.AddHostedService<MoscowMidnightRefreshService>();
         return services;
     }

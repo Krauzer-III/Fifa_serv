@@ -25,7 +25,7 @@ public sealed class MoscowMidnightRefreshService : BackgroundService
             try
             {
                 await using var scope = _scopeFactory.CreateAsyncScope();
-                await scope.ServiceProvider.GetRequiredService<DataRefreshService>().RefreshAsync(stoppingToken);
+                //await scope.ServiceProvider.GetRequiredService<DataRefreshService>().RefreshAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
             catch (Exception ex)

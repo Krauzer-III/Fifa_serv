@@ -8,12 +8,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddScoped<ParserService>();
+
+
 
 // Регистрируем наши сервисы
 builder.Services.AddSingleton<LiteDbContext>();
 builder.Services.AddScoped<HashService>();
-
+builder.Services.AddScoped<ParserService>();
 builder.Services.AddFifaDataSync();
 
 // CORS для Android приложения

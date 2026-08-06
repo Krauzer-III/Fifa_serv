@@ -1,30 +1,67 @@
 using Fifa_serv.Data;
 using Fifa_serv.Models;
-using Fifa_serv.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Fifa_serv.Controllers;
 
 [ApiController]
-[Route("api/team-ratings")]
-public sealed class TeamRatingsController : ControllerBase
+[Route("api/v1/[controller]")]
+public class RatingController : ControllerBase
 {
     private readonly LiteDbContext _db;
-    private readonly DataRefreshService _refresh;
 
-    public TeamRatingsController(LiteDbContext db, DataRefreshService refresh)
+    public RatingController(LiteDbContext db)
     {
         _db = db;
-        _refresh = refresh;
     }
 
     [HttpGet]
-    public ActionResult<IReadOnlyList<TeamRating>> Get() => Ok(_db.TeamRatings.Query().OrderBy(x => x.Position).ToList());
-
-    [HttpPost("refresh")]
-    public async Task<IActionResult> Refresh(CancellationToken cancellationToken)
+    [ProducesResponseType(
+        typeof(IReadOnlyCollection<TeamRating>),
+        StatusCodes.Status200OK
+    )]
+    public ActionResult<IReadOnlyCollection<TeamRating>> GetAll()
     {
-        await _refresh.RefreshAsync(cancellationToken);
-        return NoContent();
+        var rating = _db.TeamRatings
+            .Query()
+            .OrderBy(x => x.Position)
+            .ToList();
+
+        return Ok(rating);
+    }
+
+    [HttpGet("{teamId:int}")]
+    [ProducesResponseType(
+        typeof(TeamRating),
+        StatusCodes.Status200OK
+    )]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<TeamRating> GetByTeamId(int teamId)
+    {
+        var team = _db.TeamRatings.FindOne(
+            x => x.TeamId == teamId
+        );
+
+        if (team == null)
+        {
+            return NotFound(new
+            {
+                error = $"Команда с ID {teamId} не найдена"
+            });
+        }
+
+        return Ok(team);
+    }
+
+    [HttpDelete]
+    public IActionResult Clear()
+    {
+        var deleted = _db.TeamRatings.DeleteAll();
+
+        return Ok(new
+        {
+            message = "Рейтинг очищен",
+            deleted
+        });
     }
 }

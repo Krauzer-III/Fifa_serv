@@ -22,12 +22,20 @@ public class ParserController : ControllerBase
     {
         try
         {
-            await _parser.ParseTeamAsync();
-            return Ok(new { message = "Парсинг команды успешно выполнен" });
+            var processed = await _parser.ParseTeamAsync();
+
+            return Ok(new
+            {
+                message = "Парсинг команды успешно выполнен",
+                playersProcessed = processed
+            });
         }
         catch (Exception ex)
         {
-            return StatusCode(500, new { error = ex.Message });
+            return StatusCode(500, new
+            {
+                error = ex.Message
+            });
         }
     }
 
@@ -128,6 +136,89 @@ public class ParserController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("parse-rating")]
+    public async Task<IActionResult> ParseRatingMain()
+    {
+        try
+        {
+            var count = await _parser.ParseTeamRatingsAsync(
+                "https://superliga.rfs.ru/tournament/1054805/tables",
+                "Основной"
+            );
+
+            return Ok(new
+            {
+                message = "Парсинг основного рейтинга успешно выполнен",
+                count
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message
+            });
+        }
+    }
+
+
+
+    [HttpPost("parse-rating-playoff")]
+    public async Task<IActionResult> ParseRatingPlayoff()
+    {
+        try
+        {
+            var processed = await _parser.ParseTeamRatingsAsync("https://superliga.rfs.ru/tournament/1054805/tables?round_id=1122977");
+            //TODO надо будет переделать парсинг
+            //TODO для плейофф вообще другая модель нужна будет
+
+            return Ok(new
+            {
+                message = "Рейтинг команд успешно загружен",
+                teamsProcessed = processed
+            });
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                error = "Не удалось получить страницу рейтинга",
+                details = ex.Message
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                error = ex.Message
+            });
+        }
+    }
+
+    [HttpPost("parse-news")]
+    public async Task<IActionResult> ParseNews()
+    {
+        try
+        {
+            var count = await _parser.ParseNewsAsync(
+                "https://mfkgazprom-ugra.ru/news/"
+            );
+
+            return Ok(new
+            {
+                message = "Парсинг новостей успешно выполнен",
+                count
+            });
+        }
+        catch (Exception exception)
+        {
+            return StatusCode(500, new
+            {
+                error = exception.Message
+            });
         }
     }
 }
