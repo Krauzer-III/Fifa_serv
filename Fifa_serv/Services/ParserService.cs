@@ -28,39 +28,347 @@ public class ParserService
     public async Task<int> ParseTeamAsync()
     {
         const string teamUrl =
-            "https://superliga.rfs.ru/tournament/1054805/teams/application?team_id=1258505";
+            "http://mfkgazprom-ugra.ru/team/";
 
-        using var response = await _httpClient.GetAsync(teamUrl);
-        response.EnsureSuccessStatusCode();
-
-        var html = await response.Content.ReadAsStringAsync();
-
-        var doc = new HtmlDocument();
-        doc.LoadHtml(html);
-
-        var rows = doc.DocumentNode.SelectNodes(
-            "//table[contains(@class, 'table--team')]//tbody/tr"
+        Console.WriteLine(
+            "Начинаем парсинг команды с сайта Газпром-Югра..."
         );
 
-        if (rows == null || rows.Count == 0)
+        var html = await _httpClient.GetStringAsync(teamUrl);
+
+        var document = new HtmlDocument();
+        document.LoadHtml(html);
+
+        var playerList = document.DocumentNode
+            .SelectNodes(
+                "//ul[" +
+                "li[@data-content] and " +
+                "li/div[contains(" +
+                "concat(' ', normalize-space(@class), ' '), " +
+                "' num ')]" +
+                "]"
+            )
+            ?.FirstOrDefault();
+
+        var playerNodes = playerList?.SelectNodes(
+            "./li[@data-content]"
+        );
+
+        if (playerNodes == null || playerNodes.Count == 0)
         {
             throw new InvalidOperationException(
-                "На странице команды не найдены строки игроков. " +
-                "Вероятно, изменилась HTML-разметка сайта."
+                "Не удалось найти игроков на странице команды."
             );
         }
 
-        var processed = 0;
+        var parsedPlayers = new List<Player>();
 
-        foreach (var row in rows)
+        foreach (var node in playerNodes)
         {
-            if (await ParsePlayerRow(row))
+            try
             {
-                processed++;
+                var numberNode = node.SelectSingleNode(
+                    "./div[contains(" +
+                    "concat(' ', normalize-space(@class), ' '), " +
+                    "' num ')]"
+                );
+
+                var numberText = CleanPlayerText(numberNode);
+
+                var numberMatch = Regex.Match(
+                    numberText,
+                    @"\d+"
+                );
+
+                if (!numberMatch.Success ||
+                    !int.TryParse(
+                        numberMatch.Value,
+                        out var number))
+                {
+                    continue;
+                }
+
+                var nameNode = node.SelectSingleNode(
+                    "./div[contains(" +
+                    "concat(' ', normalize-space(@class), ' '), " +
+                    "' name ')]"
+                );
+
+                var name = CleanPlayerText(nameNode);
+
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                /*
+                 * data-content содержит HTML:
+                 *
+                 * РОЛЬ
+                 * РОДИЛСЯ
+                 * Мячи
+                 * Игры
+                 * и т.д.
+                 */
+                var dataContent = node.GetAttributeValue(
+                    "data-content",
+                    string.Empty
+                );
+
+                dataContent = HtmlEntity.DeEntitize(
+                    dataContent
+                );
+
+                var infoDocument = new HtmlDocument();
+                infoDocument.LoadHtml(dataContent);
+
+                var position = GetPlayerInfoValue(
+                    infoDocument,
+                    "РОЛЬ"
+                );
+
+                var goals = ParsePlayerInt(
+                    GetPlayerInfoValue(
+                        infoDocument,
+                        "Мячи"
+                    )
+                );
+
+                var games = ParsePlayerInt(
+                    GetPlayerInfoValue(
+                        infoDocument,
+                        "Игры"
+                    )
+                );
+
+                // Фото.
+                var imageNode = node.SelectSingleNode(
+                    "./div[contains(" +
+                    "concat(' ', normalize-space(@class), ' '), " +
+                    "' img ')]/div[@style]"
+                );
+
+                var imageStyle = imageNode?.GetAttributeValue(
+                    "style",
+                    string.Empty
+                ) ?? string.Empty;
+
+                var imageUrl = ExtractBackgroundImageUrl(
+                    imageStyle
+                );
+
+                var photoBase64 =
+                    string.IsNullOrWhiteSpace(imageUrl)
+                        ? string.Empty
+                        : await DownloadImageAsBase64Async(
+                            imageUrl
+                        );
+
+                var player = new Player
+                {
+                    Number = number,
+                    Name = name,
+
+                    // РОЛЬ с нового сайта.
+                    Position = position,
+
+                    Games = games,
+                    Goals = goals,
+
+                    // Новый источник этих данных не предоставляет.
+                    Assists = 0,
+                    YellowCards = 0,
+                    RedCards = 0,
+
+                    PhotoBase64 = photoBase64
+                };
+
+                player.Hash = _hashService.ComputeHash(
+                    player
+                );
+
+                parsedPlayers.Add(player);
+            }
+            catch (Exception exception)
+            {
+                Console.WriteLine(
+                    $"Ошибка обработки игрока: " +
+                    $"{exception.Message}"
+                );
             }
         }
 
-        return processed;
+        if (parsedPlayers.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Карточки игроков найдены, " +
+                "но ни одного игрока обработать не удалось."
+            );
+        }
+
+        /*
+         * Обновляем по имени, чтобы сохранять старые Id.
+         * Это важно, потому что клиент использует player.id
+         * для кэша фотографий.
+         */
+        var oldPlayers = _db.Players
+            .FindAll()
+            .ToList();
+
+        foreach (var player in parsedPlayers)
+        {
+            var existing = oldPlayers.FirstOrDefault(x =>
+                string.Equals(
+                    x.Name,
+                    player.Name,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
+
+            if (existing == null)
+            {
+                _db.Players.Insert(player);
+
+                Console.WriteLine(
+                    $"Добавлен игрок: #{player.Number} " +
+                    $"{player.Name}"
+                );
+
+                continue;
+            }
+
+            player.Id = existing.Id;
+
+            _db.Players.Update(player);
+
+            Console.WriteLine(
+                $"Обновлён игрок: #{player.Number} " +
+                $"{player.Name}"
+            );
+        }
+
+        // Удаляем тех, кого больше нет в основном составе.
+        var currentNames = parsedPlayers
+            .Select(x => x.Name)
+            .ToHashSet(
+                StringComparer.OrdinalIgnoreCase
+            );
+
+        foreach (var oldPlayer in oldPlayers)
+        {
+            if (!currentNames.Contains(oldPlayer.Name))
+            {
+                _db.Players.Delete(oldPlayer.Id);
+
+                Console.WriteLine(
+                    $"Удалён из состава: {oldPlayer.Name}"
+                );
+            }
+        }
+
+        Console.WriteLine(
+            $"Парсинг команды завершён: " +
+            $"{parsedPlayers.Count} игроков."
+        );
+
+        return parsedPlayers.Count;
+    }
+
+    private static string CleanPlayerText(
+    HtmlNode? node)
+    {
+        if (node == null)
+        {
+            return string.Empty;
+        }
+
+        return HtmlEntity
+            .DeEntitize(node.InnerText)
+            .Replace('\u00A0', ' ')
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Replace("\t", " ")
+            .Trim();
+    }
+
+    private static int ParsePlayerInt(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return 0;
+        }
+
+        var match = Regex.Match(
+            value,
+            @"-?\d+"
+        );
+
+        return match.Success &&
+               int.TryParse(match.Value, out var result)
+            ? result
+            : 0;
+    }
+
+    private static string ExtractBackgroundImageUrl(
+    string style)
+    {
+        if (string.IsNullOrWhiteSpace(style))
+        {
+            return string.Empty;
+        }
+
+        style = HtmlEntity.DeEntitize(style);
+
+        var match = Regex.Match(
+            style,
+            @"url\(\s*['""]?(?<url>[^'"")]+)['""]?\s*\)",
+            RegexOptions.IgnoreCase
+        );
+
+        return match.Success
+            ? match.Groups["url"].Value.Trim()
+            : string.Empty;
+    }
+
+
+    private static string GetPlayerInfoValue(
+    HtmlDocument document,
+    string fieldName)
+    {
+        var rows = document.DocumentNode.SelectNodes(
+            "//div[contains(" +
+            "concat(' ', normalize-space(@class), ' '), " +
+            "' info-player ')]//li"
+        );
+
+        if (rows == null)
+        {
+            return string.Empty;
+        }
+
+        foreach (var row in rows)
+        {
+            var divs = row.SelectNodes("./div");
+
+            if (divs == null || divs.Count < 2)
+            {
+                continue;
+            }
+
+            var label = CleanPlayerText(divs[0]);
+
+            if (!string.Equals(
+                label,
+                fieldName,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return CleanPlayerText(divs[1]);
+        }
+
+        return string.Empty;
     }
 
     // Парсим одну строку таблицы
@@ -952,106 +1260,134 @@ public class ParserService
         if (newsNodes == null || newsNodes.Count == 0)
         {
             throw new InvalidOperationException(
-                "Не найдены блоки новостей div.post.post-type-1. " +
-                "Возможно, изменилась HTML-разметка сайта."
+                "Не найдены блоки новостей."
             );
         }
 
-        var processed = 0;
+        var parsedNews = new List<News>();
 
-        foreach (var newsNode in newsNodes)
+        for (var i = 0; i < newsNodes.Count; i++)
         {
             try
             {
-                var saved = await ParseNewsNodeAsync(newsNode);
+                var news = await ParseNewsNodeAsync(
+                    newsNodes[i],
+                    i
+                );
 
-                if (saved)
+                if (news != null)
                 {
-                    processed++;
+                    parsedNews.Add(news);
                 }
             }
-            catch (Exception exception)
+            catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"Ошибка обработки новости: {exception.Message}"
+                    $"Ошибка обработки новости: {ex.Message}"
                 );
             }
         }
 
-        if (processed == 0)
+        if (parsedNews.Count == 0)
         {
             throw new InvalidOperationException(
-                "Блоки новостей найдены, но ни одну новость " +
-                "не удалось обработать."
+                "Не удалось обработать ни одной новости."
             );
         }
 
+        // Сохраняем старые ID, чтобы клиентские данные
+        // лишний раз не менялись.
+        var oldNews = _db.News.FindAll().ToList();
+
+        foreach (var news in parsedNews)
+        {
+            var existing = oldNews.FirstOrDefault(x =>
+                string.Equals(
+                    x.NewsUrl,
+                    news.NewsUrl,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
+
+            if (existing != null)
+            {
+                news.Id = existing.Id;
+                _db.News.Update(news);
+            }
+            else
+            {
+                _db.News.Insert(news);
+            }
+        }
+
+        // Убираем новости, которых уже нет
+        // в текущей выдаче сайта.
+        var currentUrls = parsedNews
+            .Select(x => x.NewsUrl)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var old in oldNews)
+        {
+            if (!currentUrls.Contains(old.NewsUrl))
+            {
+                _db.News.Delete(old.Id);
+            }
+        }
+
         Console.WriteLine(
-            $"Парсинг новостей завершён. Обработано: {processed}"
+            $"Парсинг новостей завершён: {parsedNews.Count}"
         );
 
-        return processed;
+        return parsedNews.Count;
     }
 
-    private async Task<bool> ParseNewsNodeAsync(HtmlNode newsNode)
+    private async Task<News?> ParseNewsNodeAsync(
+    HtmlNode newsNode,
+    int sortOrder)
     {
         var linkNode = newsNode.SelectSingleNode(".//a[@href]");
 
         if (linkNode == null)
         {
-            Console.WriteLine(
-                "Пропущена новость: не найдена ссылка."
-            );
-
-            return false;
+            return null;
         }
 
-        var relativeNewsUrl = linkNode.GetAttributeValue(
-            "href",
-            string.Empty
+        var newsUrl = MakeNewsAbsoluteUrl(
+            linkNode.GetAttributeValue("href", string.Empty)
         );
-
-        var newsUrl = MakeNewsAbsoluteUrl(relativeNewsUrl);
 
         if (string.IsNullOrWhiteSpace(newsUrl))
         {
-            Console.WriteLine(
-                "Пропущена новость: ссылка пустая."
-            );
-
-            return false;
+            return null;
         }
 
         var titleNode = newsNode.SelectSingleNode(
-            ".//div[" +
-            "contains(concat(' ', normalize-space(@class), ' '), ' text ')" +
-            "]/p"
+            ".//div[contains(" +
+            "concat(' ', normalize-space(@class), ' '), " +
+            "' text ')]/p"
         );
 
         var title = CleanNewsText(titleNode);
 
         if (string.IsNullOrWhiteSpace(title))
         {
-            Console.WriteLine(
-                $"Пропущена новость {newsUrl}: заголовок пустой."
-            );
-
-            return false;
+            return null;
         }
 
         var categoryNode = newsNode.SelectSingleNode(
-            ".//div[" +
-            "contains(concat(' ', normalize-space(@class), ' '), ' category ')" +
-            "]" +
-            "//div[" +
-            "contains(concat(' ', normalize-space(@class), ' '), ' td ')" +
-            "]"
+            ".//div[contains(" +
+            "concat(' ', normalize-space(@class), ' '), " +
+            "' category ')]" +
+            "//div[contains(" +
+            "concat(' ', normalize-space(@class), ' '), " +
+            "' td ')]"
         );
 
         var category = CleanNewsText(categoryNode);
 
-        var imageUrl = ExtractNewsImageUrl(newsNode);
-        imageUrl = MakeNewsAbsoluteUrl(imageUrl);
+        var imageUrl = MakeNewsAbsoluteUrl(
+            ExtractNewsImageUrl(newsNode)
+        );
 
         var imageBase64 = string.IsNullOrWhiteSpace(imageUrl)
             ? string.Empty
@@ -1062,45 +1398,16 @@ public class ParserService
             Title = title,
             Category = category,
             NewsUrl = newsUrl,
-            ImageBase64 = imageBase64
+            ImageBase64 = imageBase64,
+
+            // 0 = самая свежая.
+            SortOrder = sortOrder
         };
 
         news.Hash = _hashService.ComputeHash(news);
 
-        var existing = _db.News.FindOne(
-            x => x.NewsUrl == news.NewsUrl
-        );
-
-        if (existing == null)
-        {
-            _db.News.Insert(news);
-
-            Console.WriteLine(
-                $"Добавлена новость: {news.Title}"
-            );
-
-            return true;
-        }
-
-        if (existing.Hash == news.Hash)
-        {
-            Console.WriteLine(
-                $"Без изменений: {news.Title}"
-            );
-
-            return true;
-        }
-
-        news.Id = existing.Id;
-        _db.News.Update(news);
-
-        Console.WriteLine(
-            $"Обновлена новость: {news.Title}"
-        );
-
-        return true;
+        return news;
     }
-
     private static string ExtractNewsImageUrl(HtmlNode newsNode)
     {
         var style = newsNode.GetAttributeValue(

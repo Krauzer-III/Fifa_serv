@@ -37,11 +37,7 @@ public sealed class MoscowMidnightRefreshService : BackgroundService
 
     private static TimeSpan GetDelayUntilNextMoscowMidnight()
     {
-        var nowUtc = DateTimeOffset.UtcNow;
-        var nowMoscow = TimeZoneInfo.ConvertTime(nowUtc, Moscow);
-        var nextLocal = nowMoscow.Date.AddDays(1);
-        var nextUtc = TimeZoneInfo.ConvertTimeToUtc(nextLocal, Moscow);
-        return nextUtc - nowUtc.UtcDateTime;
+        return TimeSpan.FromHours(1);
     }
 
     private static TimeZoneInfo ResolveMoscowTimeZone()

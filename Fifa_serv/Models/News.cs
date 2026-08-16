@@ -27,5 +27,7 @@ public class News
     /// </summary>
     public string ImageBase64 { get; set; } = string.Empty;
 
+    public int SortOrder { get; set; }
+
     public string Hash { get; set; } = string.Empty;
 }

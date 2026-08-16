@@ -19,9 +19,9 @@ public class NewsController : ControllerBase
     public ActionResult<List<News>> GetAll()
     {
         var news = _db.News
-            .Query()
-            .OrderByDescending(x => x.Id)
-            .ToList();
+        .Query()
+        .OrderBy(x => x.SortOrder)
+        .ToList();
 
         return Ok(news);
     }
